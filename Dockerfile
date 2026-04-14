@@ -31,6 +31,16 @@ LABEL maintainer="unclecode"
 LABEL description="🔥🕷️ Crawl4AI: Open-source LLM Friendly Web Crawler & scraper"
 LABEL version="1.0"
 
+# 切换到国内 apt mirror。Why: deb.debian.org 从国内拉偶发 502,曾导致 build 失败 30+ 分钟后半途挂掉。
+# 同时兼容 deb822 (sources.list.d/debian.sources) 和旧格式 (sources.list)。
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g; s|https://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list; \
+    fi
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -110,14 +120,14 @@ WORKDIR ${APP_HOME}
 RUN echo '#!/bin/bash\n\
 if [ "$USE_LOCAL" = "true" ]; then\n\
     echo "📦 Installing from local source..."\n\
-    pip install --no-cache-dir /tmp/project/\n\
+    pip install /tmp/project/\n\
 else\n\
     echo "🌐 Installing from GitHub..."\n\
     for i in {1..3}; do \n\
         git clone --branch ${GITHUB_BRANCH} ${GITHUB_REPO} /tmp/crawl4ai && break || \n\
         { echo "Attempt $i/3 failed! Taking a short break... ☕"; sleep 5; }; \n\
     done\n\
-    pip install --no-cache-dir /tmp/crawl4ai\n\
+    pip install /tmp/crawl4ai\n\
 fi' > /tmp/install.sh && chmod +x /tmp/install.sh
 
 COPY . /tmp/project/
