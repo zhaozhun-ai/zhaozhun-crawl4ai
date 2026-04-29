@@ -57,6 +57,7 @@ from fastapi.staticfiles import StaticFiles
 from job import init_job_router
 
 from mcp_bridge import attach_mcp, mcp_resource, mcp_template, mcp_tool
+from proxy_manager import maybe_apply_auto_proxy, get_proxy_status
 
 import ast
 import crawl4ai as _c4
@@ -356,7 +357,7 @@ async def generate_html(
     """
     validate_url_scheme(body.url, allow_raw=True)
     from crawler_pool import get_crawler
-    cfg = CrawlerRunConfig()
+    cfg = await maybe_apply_auto_proxy(CrawlerRunConfig())
     try:
         crawler = await get_crawler(get_default_browser_config())
         results = await crawler.arun(url=body.url, config=cfg)
@@ -389,7 +390,9 @@ async def generate_screenshot(
     validate_url_scheme(body.url)
     from crawler_pool import get_crawler
     try:
-        cfg = CrawlerRunConfig(screenshot=True, screenshot_wait_for=body.screenshot_wait_for)
+        cfg = await maybe_apply_auto_proxy(
+            CrawlerRunConfig(screenshot=True, screenshot_wait_for=body.screenshot_wait_for)
+        )
         crawler = await get_crawler(get_default_browser_config())
         results = await crawler.arun(url=body.url, config=cfg)
         if not results[0].success:
@@ -424,7 +427,7 @@ async def generate_pdf(
     validate_url_scheme(body.url)
     from crawler_pool import get_crawler
     try:
-        cfg = CrawlerRunConfig(pdf=True)
+        cfg = await maybe_apply_auto_proxy(CrawlerRunConfig(pdf=True))
         crawler = await get_crawler(get_default_browser_config())
         results = await crawler.arun(url=body.url, config=cfg)
         if not results[0].success:
@@ -497,7 +500,7 @@ async def execute_js(
     validate_url_scheme(body.url)
     from crawler_pool import get_crawler
     try:
-        cfg = CrawlerRunConfig(js_code=body.scripts)
+        cfg = await maybe_apply_auto_proxy(CrawlerRunConfig(js_code=body.scripts))
         crawler = await get_crawler(get_default_browser_config())
         results = await crawler.arun(url=body.url, config=cfg)
         if not results[0].success:
@@ -599,6 +602,16 @@ def get_hook_example(hook_point: str) -> str:
 @app.get(config["observability"]["health_check"]["endpoint"])
 async def health():
     return {"status": "ok", "timestamp": time.time(), "version": __version__}
+
+
+@app.get("/proxy/status")
+@limiter.limit(config["rate_limiting"]["default_limit"])
+async def proxy_status(
+    request: Request,
+    _td: Dict = Depends(token_dep),
+):
+    """Return auto-proxy runtime status for observability/debugging."""
+    return JSONResponse(get_proxy_status())
 
 
 @app.get(config["observability"]["prometheus"]["endpoint"])

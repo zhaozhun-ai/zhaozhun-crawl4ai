@@ -180,6 +180,25 @@
 
     <!-- Main Playground -->
     <main id="playground" class="flex-1 flex flex-col p-4 space-y-4 max-w-5xl w-full mx-auto">
+        <!-- Auto Proxy Status -->
+        <section id="proxy-status-card" class="bg-surface rounded-lg border border-border p-3 text-sm">
+            <div class="flex items-center justify-between">
+                <h2 class="font-medium">Proxy Status</h2>
+                <span id="proxy-enabled-badge" class="px-2 py-0.5 rounded text-xs border border-border text-secondary">Checking...</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3 text-xs">
+                <div><span class="text-secondary">Pool Valid:</span> <span id="proxy-pool-valid">-</span></div>
+                <div><span class="text-secondary">Pool Total:</span> <span id="proxy-pool-total">-</span></div>
+                <div><span class="text-secondary">Used:</span> <span id="proxy-total-acquired">-</span></div>
+                <div><span class="text-secondary">Last Fetch:</span> <span id="proxy-last-fetch">-</span></div>
+                <div><span class="text-secondary">Fetch Count:</span> <span id="proxy-last-count">-</span></div>
+            </div>
+            <div class="mt-2 text-xs">
+                <span class="text-secondary">Last Error:</span>
+                <span id="proxy-last-error" class="text-light">-</span>
+            </div>
+        </section>
+
         <!-- Request Builder -->
         <section class="bg-surface rounded-lg border border-border overflow-hidden">
             <div class="px-4 py-2 border-b border-border flex items-center">
@@ -531,6 +550,49 @@
             statusEl.className = 'text-xs text-green-400';
 
             return await res.json();
+        }
+
+        function formatProxyTime(ts) {
+            if (!ts) return '-';
+            const dt = new Date(ts * 1000);
+            return `${dt.toLocaleTimeString()}`;
+        }
+
+        async function refreshProxyStatus() {
+            const badge = document.getElementById('proxy-enabled-badge');
+            try {
+                const res = await fetch('/proxy/status', { method: 'GET', headers: { 'Accept': 'application/json' } });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                const enabled = !!data.enabled;
+                const required = !!data.required;
+                const pool = data.pool || {};
+                const usage = data.usage || {};
+                const fetchInfo = data.fetch || {};
+
+                document.getElementById('proxy-pool-valid').textContent = String(pool.valid ?? '-');
+                document.getElementById('proxy-pool-total').textContent = String(pool.total ?? '-');
+                document.getElementById('proxy-total-acquired').textContent = String(usage.total_acquired ?? '-');
+                document.getElementById('proxy-last-fetch').textContent = formatProxyTime(fetchInfo.last_fetch_at);
+                document.getElementById('proxy-last-count').textContent = String(fetchInfo.last_fetch_count ?? '-');
+                document.getElementById('proxy-last-error').textContent = fetchInfo.last_error || '-';
+
+                if (!enabled) {
+                    badge.textContent = 'Disabled';
+                    badge.className = 'px-2 py-0.5 rounded text-xs border border-border text-secondary';
+                } else if (required) {
+                    badge.textContent = 'Enabled (Required)';
+                    badge.className = 'px-2 py-0.5 rounded text-xs border border-red-500 text-red-400';
+                } else {
+                    badge.textContent = 'Enabled';
+                    badge.className = 'px-2 py-0.5 rounded text-xs border border-green-500 text-green-400';
+                }
+            } catch (e) {
+                badge.textContent = 'Unavailable';
+                badge.className = 'px-2 py-0.5 rounded text-xs border border-yellow-500 text-yellow-400';
+                document.getElementById('proxy-last-error').textContent = e.message || 'Failed to load';
+            }
         }
 
         // ================ SERVER COMMUNICATION ================
@@ -971,6 +1033,10 @@
             
             // Initialize copy buttons
             initCopyButtons();
+            refreshProxyStatus();
+            if (!window.__proxyStatusTimer) {
+                window.__proxyStatusTimer = window.setInterval(refreshProxyStatus, 5000);
+            }
         }
 
         // Initialize on page load

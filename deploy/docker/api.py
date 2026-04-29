@@ -47,6 +47,7 @@ from utils import (
     get_llm_base_url
 )
 from webhook import WebhookDeliveryService
+from proxy_manager import maybe_apply_auto_proxy
 
 import psutil, time
 
@@ -84,7 +85,8 @@ async def handle_llm_qa(
             **cfg["crawler"]["browser"].get("kwargs", {}),
         )
         crawler = await get_crawler(browser_cfg)
-        result = await crawler.arun(url)
+        run_cfg = await maybe_apply_auto_proxy(CrawlerRunConfig())
+        result = await crawler.arun(url, config=run_cfg)
         if not result.success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -173,14 +175,14 @@ async def process_llm_extraction(
         cache_mode = CacheMode.ENABLED if cache == "1" else CacheMode.WRITE_ONLY
 
         async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(
-                url=url,
-                config=CrawlerRunConfig(
+            run_cfg = await maybe_apply_auto_proxy(
+                CrawlerRunConfig(
                     extraction_strategy=llm_strategy,
                     scraping_strategy=LXMLWebScrapingStrategy(),
                     cache_mode=cache_mode
                 )
             )
+            result = await crawler.arun(url=url, config=run_cfg)
 
         if not result.success:
             await redis.hset(f"task:{task_id}", mapping={
@@ -290,14 +292,14 @@ async def handle_markdown_request(
             **_cfg["crawler"]["browser"].get("kwargs", {}),
         )
         crawler = await get_crawler(browser_cfg)
-        result = await crawler.arun(
-            url=decoded_url,
-            config=CrawlerRunConfig(
+        run_cfg = await maybe_apply_auto_proxy(
+            CrawlerRunConfig(
                 markdown_generator=md_generator,
                 scraping_strategy=LXMLWebScrapingStrategy(),
                 cache_mode=cache_mode
             )
         )
+        result = await crawler.arun(url=decoded_url, config=run_cfg)
 
         if not result.success:
             raise HTTPException(
@@ -541,6 +543,7 @@ async def handle_crawl_request(
         urls = [('https://' + url) if not url.startswith(('http://', 'https://')) and not url.startswith(("raw:", "raw://")) else url for url in urls]
         browser_config = BrowserConfig.load(browser_config)
         crawler_config = CrawlerRunConfig.load(crawler_config)
+        crawler_config = await maybe_apply_auto_proxy(crawler_config)
 
         dispatcher = MemoryAdaptiveDispatcher(
             memory_threshold_percent=config["crawler"]["memory_threshold_percent"],
@@ -726,6 +729,7 @@ async def handle_stream_crawl_request(
         crawler_config = CrawlerRunConfig.load(crawler_config)
         crawler_config.scraping_strategy = LXMLWebScrapingStrategy()
         crawler_config.stream = True
+        crawler_config = await maybe_apply_auto_proxy(crawler_config)
 
         dispatcher = MemoryAdaptiveDispatcher(
             memory_threshold_percent=config["crawler"]["memory_threshold_percent"],
