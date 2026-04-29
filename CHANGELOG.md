@@ -5,6 +5,29 @@ All notable changes to Crawl4AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — zhaozhun fork
+
+### Security
+
+- Hardened the QG auto-proxy middleware before enabling it in production:
+  - `C4AI_AUTO_PROXY_REQUIRED` now defaults to `true`. When auto-proxy is on
+    and a proxy fetch fails, the request errors instead of silently falling
+    back to a direct connection (real-IP exposure).
+  - `QG_FETCH_URL` is validated at startup. IP literals are rejected; the
+    hostname is DNS-resolved and any answer in private / loopback /
+    link-local / multicast / reserved / unspecified ranges (including
+    AWS / GCP / Azure / Alibaba IMDS) is refused. Numeric-form bypasses
+    (decimal int, dotted-shorthand, IPv4-mapped or IPv4-compatible IPv6)
+    are blocked.
+  - `_fetch_rows` streams the QG response and aborts above
+    `QG_FETCH_MAX_BYTES` (default 1 MiB) to prevent OOM via a malicious
+    upstream.
+  - `last_error` on `GET /proxy/status` and the `RuntimeError` raised by
+    `maybe_apply_auto_proxy` are sanitized to a class-level summary so
+    configured URLs / credentials do not leak to API callers. The full
+    message still goes to server logs.
+  - `PROXY_MIN_READY` and `PROXY_MAX_READY` are validated at construction.
+
 ## [0.8.0] - 2026-01-12
 
 ### Security
