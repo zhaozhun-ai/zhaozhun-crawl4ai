@@ -18,6 +18,10 @@ x-base-config: &base-config
   #   - LLM_PROVIDER=${LLM_PROVIDER:-}  # Optional: Override default provider (e.g., "anthropic/claude-3-opus")
   volumes:
     - /dev/shm:/dev/shm  # Chromium performance
+    - ./deploy/docker/server.py:/app/server.py:ro
+    - ./deploy/docker/api.py:/app/api.py:ro
+    - ./deploy/docker/proxy_manager.py:/app/proxy_manager.py:ro
+    - ./deploy/docker/static:/app/static:ro
   deploy:
     resources:
       limits:
