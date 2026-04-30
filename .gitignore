@@ -298,3 +298,6 @@ scripts/
 *.rdb
 *.ldb
 MEMORY.md
+
+# Local crawl/test output
+output_md/
