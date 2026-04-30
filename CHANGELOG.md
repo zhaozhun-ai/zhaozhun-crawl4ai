@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     configured URLs / credentials do not leak to API callers. The full
     message still goes to server logs.
   - `PROXY_MIN_READY` and `PROXY_MAX_READY` are validated at construction.
+  - **DNS rebinding closed**: `QG_FETCH_URL`'s hostname is resolved once at
+    startup and the safe IPs are pinned. `_fetch_rows` rewrites the request
+    URL to a pinned IP (round-robin across the resolved set) and carries the
+    original hostname in the `Host` header and the `sni_hostname` httpcore
+    extension, so TLS certificate validation and HTTP virtual hosting still
+    match while runtime DNS lookup is bypassed entirely.
 
 ## [0.8.0] - 2026-01-12
 

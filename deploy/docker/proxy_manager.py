@@ -1,12 +1,13 @@
 import asyncio
 import ipaddress
+import itertools
 import json
 import logging
 import os
 import socket
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -58,17 +59,17 @@ def _is_unsafe_ip(ip) -> bool:
     )
 
 
-def _validate_fetch_url(url: str) -> None:
+def _validate_fetch_url(url: str) -> Tuple[str, List[str]]:
     """Reject SSRF-prone QG_FETCH_URL values at startup.
 
     Strategy: disallow IP literals entirely, then DNS-resolve the hostname and
     block any answer in private/reserved space. This avoids numeric-form
     bypasses (decimal int / shorthand / IPv4-mapped IPv6).
 
-    Known limitation: DNS rebinding between this startup check and httpx's
-    per-request resolve. Full mitigation would need a custom transport that
-    pins to the validated IP. TODO(2026-04-29 xiaodeng): revisit if QG endpoint
-    moves to a less-trusted resolver path.
+    Returns the canonical hostname and the de-duplicated list of safe IPs the
+    hostname resolved to. The caller is expected to pin subsequent fetches to
+    these IPs (see _fetch_rows) so DNS rebinding between startup and
+    request-time cannot redirect traffic to a private/reserved address.
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -101,6 +102,7 @@ def _validate_fetch_url(url: str) -> None:
         raise ValueError(
             f"QG_FETCH_URL hostname did not resolve: {type(e).__name__}"
         ) from e
+    safe_ips: List[str] = []
     for info in infos:
         addr = info[4][0]
         # IPv6 sockaddr may include zone id, e.g. "fe80::1%eth0"
@@ -111,6 +113,13 @@ def _validate_fetch_url(url: str) -> None:
             raise ValueError(
                 f"QG_FETCH_URL host {host!r} resolves to blocked IP {addr}"
             )
+        # Normalize so de-dup works for IPv4-mapped IPv6 vs plain IPv4 dups.
+        normalized = str(ip)
+        if normalized not in safe_ips:
+            safe_ips.append(normalized)
+    if not safe_ips:
+        raise ValueError(f"QG_FETCH_URL host {host!r} produced no IPs")
+    return host, safe_ips
 
 
 def _safe_error_message(e: BaseException) -> str:
@@ -157,8 +166,17 @@ class QGAutoProxyManager:
         if self.max_ready < self.min_ready:
             raise ValueError("PROXY_MAX_READY must be >= PROXY_MIN_READY")
 
+        # Pinned IPs are resolved once here. We deliberately do not refresh at
+        # runtime: a re-resolve path would reopen the rebinding window we just
+        # closed. If the upstream legitimately rotates IPs, fetches fail-closed
+        # (Auto proxy injection failed) until the container is restarted, which
+        # ops should treat as the recovery action.
+        self._fetch_host: Optional[str] = None
+        self._pinned_ips: List[str] = []
+        self._pinned_cycle: Optional[itertools.cycle] = None
         if self.fetch_url:
-            _validate_fetch_url(self.fetch_url)
+            self._fetch_host, self._pinned_ips = _validate_fetch_url(self.fetch_url)
+            self._pinned_cycle = itertools.cycle(self._pinned_ips)
 
         self._pool: List[_TimedProxy] = []
         self._lock = asyncio.Lock()
@@ -207,11 +225,42 @@ class QGAutoProxyManager:
             if len(self._pool) >= self.max_ready:
                 break
 
+    def _build_pinned_request(self) -> Tuple[httpx.URL, dict, dict]:
+        """Rewrite fetch_url to a pre-validated IP, preserving SNI + Host header.
+
+        Why: httpcore re-resolves DNS at connect time. A controlled DNS server
+        could return a private IP between startup validation and request time
+        (DNS rebinding). By connecting directly to a pinned IP from the
+        startup-validated set, we bypass DNS at request time entirely. SNI and
+        Host header still carry the original hostname so TLS cert validation
+        and HTTP virtual hosting both work.
+        """
+        if not self._fetch_host or not self._pinned_cycle:
+            raise RuntimeError("fetch_url not validated; pinned IP set is empty")
+        ip = next(self._pinned_cycle)
+        url = httpx.URL(self.fetch_url).copy_with(host=ip)
+        headers = {"Host": self._fetch_host}
+        extensions = {"sni_hostname": self._fetch_host}
+        return url, headers, extensions
+
     async def _fetch_rows(self) -> List[str]:
         self.last_fetch_at = time.time()
         try:
-            async with httpx.AsyncClient(timeout=self.fetch_timeout_seconds) as client:
-                async with client.stream("GET", self.fetch_url) as resp:
+            url, headers, extensions = self._build_pinned_request()
+            # Why: redirects would parse Location and re-resolve DNS, reopening the
+            # rebinding window the IP pin is meant to close. http2 flips :authority
+            # derivation rules; lock to h1 so the explicit Host header always wins.
+            # trust_env=False prevents ambient HTTP(S)_PROXY env from rerouting the
+            # pinned-IP fetch through an attacker-controlled hop.
+            async with httpx.AsyncClient(
+                timeout=self.fetch_timeout_seconds,
+                follow_redirects=False,
+                http2=False,
+                trust_env=False,
+            ) as client:
+                async with client.stream(
+                    "GET", url, headers=headers, extensions=extensions
+                ) as resp:
                     resp.raise_for_status()
                     content_type = resp.headers.get("content-type", "").lower()
                     body_bytes = bytearray()

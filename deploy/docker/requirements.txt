@@ -15,3 +15,8 @@ PyJWT==2.10.1
 mcp>=1.18.0
 websockets>=15.0.1
 httpx[http2]>=0.27.2
+# Why: proxy_manager.py uses extensions["sni_hostname"] to defeat DNS rebinding
+# during QG endpoint fetch. That extension is honored by httpcore >= 0.17.
+# httpcore 1.x is what httpx 0.27+ ships, but the floor is asserted to keep
+# the security claim verifiable.
+httpcore>=1.0
